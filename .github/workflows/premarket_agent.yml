@@ -1,0 +1,39 @@
+name: Yoel E1/E2 Premarket Agent
+
+on:
+  schedule:
+    # --- EDT (horario de verano, UTC-4) ~marzo-noviembre ---
+    - cron: "0 13 * * 1-5"    # 09:00 ET
+    - cron: "0 15 * * 1-5"    # 11:00 ET
+    - cron: "30 17 * * 1-5"   # 13:30 ET
+    # --- EST (horario estándar, UTC-5) ~noviembre-marzo ---
+    - cron: "0 14 * * 1-5"    # 09:00 ET
+    - cron: "0 16 * * 1-5"    # 11:00 ET
+    - cron: "30 18 * * 1-5"   # 13:30 ET
+  workflow_dispatch:          # botón "Run workflow" manual en GitHub, para probar
+    inputs:
+      force_run:
+        description: "Forzar ejecución ignorando la ventana horaria (1 = sí)"
+        required: false
+        default: "0"
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Correr agente
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          FORCE_RUN: ${{ github.event.inputs.force_run || '0' }}
+        run: python premarket_agent.py
