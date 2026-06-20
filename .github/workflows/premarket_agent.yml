@@ -34,6 +34,6 @@ jobs:
 
       - name: Correr agente
         env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
           FORCE_RUN: ${{ github.event.inputs.force_run || '0' }}
         run: python premarket_agent.py
