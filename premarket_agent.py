@@ -91,7 +91,7 @@ def get_macro_context():
         try:
             t = yf.Ticker(sym)
             info = t.info
-            hist = t.history(period="2d", interval="15m")
+            hist = t.history(period="2d", interval="15m", prepost=True)
             if hist.empty:
                 out[sym] = f"{sym}: No disponible"
                 continue
@@ -157,9 +157,16 @@ def get_snapshot_price(hist):
     cada ventana de break (no puedes ver desktop antes de las 9:30 ET).
     """
     try:
-        today = datetime.now().date()
+        today = datetime.now(ZoneInfo("America/New_York")).date()
         today_data = hist[hist.index.date == today]
         if today_data.empty:
+            # SOLO PRUEBA: fuera de horario de mercado (fin de semana, feriado) no hay
+            # barras de "hoy". TEST_ALLOW_STALE permite ver la última barra extendida
+            # disponible (ej. after-hours del viernes) para validar que prepost=True
+            # sí trae post-market real. NO se activa en producción -- requiere la
+            # variable de entorno explícita, que no está en el .yml del cron.
+            if os.environ.get("TEST_ALLOW_STALE") == "1" and not hist.empty:
+                return round(float(hist['Close'].iloc[-1]), 2)
             return None
         idx = today_data.index.get_indexer([today_data.index[-1]], method='nearest')[0]
         return round(float(today_data['Close'].iloc[idx]), 2)
@@ -506,13 +513,21 @@ def create_premarket_chart(ticker, df, yoel_data):
 def get_full_premarket_analysis(ticker):
     stock = yf.Ticker(ticker)
     info = stock.info
-    hist = stock.history(period="10d", interval="15m")
+    hist = stock.history(period="10d", interval="15m")  # regular hours -- gráfico y lógica Yoel E1/E2 sin tocar
 
     if hist.empty:
         return None
 
+    # Serie aparte SOLO para el precio actual en pre-market/extended hours.
+    # No se usa para el gráfico ni para analyze_yoel_e1_e2 -- esas dos siguen
+    # leyendo `hist` (regular hours) exactamente como antes.
+    try:
+        hist_extended = stock.history(period="2d", interval="15m", prepost=True)
+    except Exception:
+        hist_extended = hist
+
     prev_close = info.get('regularMarketPreviousClose')
-    snapshot_price = get_snapshot_price(hist)
+    snapshot_price = get_snapshot_price(hist_extended)
     current = snapshot_price if snapshot_price is not None else float(hist['Close'].iloc[-1])
 
     var_pct = ((current - prev_close) / prev_close * 100) if prev_close else 0
