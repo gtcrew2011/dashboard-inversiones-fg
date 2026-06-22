@@ -561,7 +561,7 @@ def get_full_premarket_analysis(ticker):
     }
 
 def generate_report():
-    report = f"🕒 **SNAPSHOT Yoel_E1_E2 | {datetime.now().strftime('%Y-%m-%d %H:%M ET')}**\n\n"
+    report = f"🕒 **SNAPSHOT Yoel_E1_E2 | {datetime.now(ZoneInfo('America/New_York')).strftime('%Y-%m-%d %H:%M ET')}**\n\n"
 
     macro = get_macro_context()
     report += f"📊 Macro (Bloque B): {macro.get('SPY','')} | {macro.get('QQQ','')}\n\n"
@@ -615,7 +615,7 @@ def job():
 
     macro = get_macro_context()
     header = (
-        f"🕒 **SNAPSHOT Yoel_E1_E2 | {datetime.now().strftime('%Y-%m-%d %H:%M ET')}**\n"
+        f"🕒 **SNAPSHOT Yoel_E1_E2 | {datetime.now(ZoneInfo('America/New_York')).strftime('%Y-%m-%d %H:%M ET')}**\n"
         f"📊 Macro (Bloque B): {macro.get('SPY','')} | {macro.get('QQQ','')}"
     )
     send_to_discord(header)
