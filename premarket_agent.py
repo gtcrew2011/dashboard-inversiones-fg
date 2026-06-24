@@ -276,7 +276,7 @@ def analyze_yoel_e1_e2(df):
     # Bearish setup (9 cierres < cierre[−4]) = agotamiento bajista → señal de posible reversión alcista.
     # Bullish setup (9 cierres > cierre[−4]) = agotamiento alcista → señal de posible reversión bajista.
     try:
-        cl = df['Close']
+        cl = hourly['Close']  # Hora — horizonte correcto para TD Setup (9h ≈ 9 sesiones reales)
         bear_cnt = bull_cnt = 0
         for i in range(len(cl) - 1, 3, -1):
             if cl.iloc[i] < cl.iloc[i - 4]:
