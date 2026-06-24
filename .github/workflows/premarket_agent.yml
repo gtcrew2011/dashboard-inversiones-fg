@@ -2,11 +2,12 @@ name: Yoel E1/E2 Premarket Agent
 
 on:
   schedule:
-    # ZoneInfo("America/New_York") en el script maneja DST automaticamente --
-    # no se necesitan crons duplicados para EST/EDT. Un solo set en UTC es suficiente.
-    - cron: "0 13 * * 1-5"    # 09:00 ET (EDT=UTC-4)
-    - cron: "0 15 * * 1-5"    # 11:00 ET
-    - cron: "30 17 * * 1-5"   # 13:30 ET
+    # Minutos desplazados (:07, :37) en vez de horas redondas para evitar la cola
+    # de alta carga de GitHub Actions, que retrasa los crons de :00 hasta 15-60 min.
+    # ZoneInfo("America/New_York") en el script maneja DST automaticamente.
+    - cron: "7 13 * * 1-5"    # 09:07 ET (EDT=UTC-4)
+    - cron: "7 15 * * 1-5"    # 11:07 ET
+    - cron: "37 17 * * 1-5"   # 13:37 ET
   workflow_dispatch:
     inputs:
       force_run:
@@ -32,7 +33,5 @@ jobs:
       - name: Correr agente
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          # Para runs programados: FORCE_RUN=1 siempre -- el cron ya es la guardia de tiempo.
-          # Para runs manuales: respeta el input (default 0, lo que activa _is_target_window).
           FORCE_RUN: ${{ github.event_name == 'schedule' && '1' || github.event.inputs.force_run || '0' }}
         run: python premarket_agent.py
