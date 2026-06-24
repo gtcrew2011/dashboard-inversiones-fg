@@ -233,19 +233,71 @@ def analyze_yoel_e1_e2(df):
     ma20_h_series = h_close.rolling(20).mean()
     ma20_h = ma20_h_series.iloc[-1]
 
-    # Bollinger en Hora (Bloque D, capa de decisión) -- NO en 15min, que es solo timing (Bloque F).
-    bb_mid = h_close.rolling(20).mean().iloc[-1]
-    bb_std = h_close.rolling(20).std().iloc[-1]
-    bb_width = (bb_mid + 2*bb_std) - (bb_mid - 2*bb_std)
+    # BB15 real (Bloque F — timing 15min). df ya es 15min, temporalidad correcta del checklist.
+    # Opción A: ancho actual > promedio móvil 50 barras * factor_abierta (1.0).
+    # Mismo cálculo que Yoel_E1_E2_CambioDeTendencia.ts en TOS.
+    bb15_width_series = df['Close'].rolling(20).std() * 4   # (upper−lower) = 4σ
+    bb15_current      = bb15_width_series.iloc[-1]
+    bb15_avg          = bb15_width_series.rolling(50).mean().iloc[-1]
+    no_lateral = bool(not pd.isna(bb15_avg) and bb15_avg > 0 and bb15_current > bb15_avg)
 
-    # bb_width_avg debe ser un promedio MÓVIL reciente del ancho (no el promedio de todo el histórico),
-    # para que 'no_lateral' reaccione al régimen de volatilidad actual, igual que en el script TOS.
-    bb_width_series = h_close.rolling(20).std() * 4
-    bb_width_avg = bb_width_series.rolling(20).mean().iloc[-1]
+    # ── Volumen relativo (Pring) ──────────────────────────────────────────────
+    # Promedio de las últimas 4 barras de 15min (≈1h) vs media histórica de la ventana.
+    # Confirma que la ruptura tiene convicción real detrás.
+    try:
+        avg_vol    = df['Volume'].mean()
+        recent_vol = df['Volume'].tail(4).mean()
+        vol_relativo = round(recent_vol / avg_vol, 2) if avg_vol > 0 else None
+        vol_confirma = vol_relativo is not None and vol_relativo >= 1.2
+    except Exception:
+        vol_relativo, vol_confirma = None, False
 
-    no_lateral = bool(not pd.isna(bb_width_avg) and bb_width_avg > 0 and bb_width > bb_width_avg * 1.0)
+    # ── Soporte y resistencia horizontales (Murphy) ───────────────────────────
+    # Swing highs/lows del horario ya calculados arriba como niveles de referencia.
+    # El más cercano por encima = resistencia; el más cercano por debajo = soporte.
+    try:
+        swing_high_prices = h_high[swing_high].dropna()
+        swing_low_prices  = h_low[swing_low].dropna()
+        resistencias_arr  = swing_high_prices[swing_high_prices > price].sort_values()
+        soportes_arr      = swing_low_prices[swing_low_prices < price].sort_values(ascending=False)
+        nivel_resistencia = float(resistencias_arr.iloc[0]) if len(resistencias_arr) > 0 else None
+        nivel_soporte     = float(soportes_arr.iloc[0])     if len(soportes_arr) > 0     else None
+    except Exception:
+        nivel_resistencia, nivel_soporte = None, None
 
-    price = df['Close'].iloc[-1]
+    # ── Distancia a MA20H en % (contexto de timing) ───────────────────────────
+    # Un precio ya alejado 2%+ de la MA20H entra tarde -- mayor riesgo de perseguir.
+    dist_ma20h_pct = round((price - ma20_h) / ma20_h * 100, 2) if ma20_h else None
+
+    # ── Conteo DeMark simplificado (agotamiento) ──────────────────────────────
+    # TD Setup: 9 cierres consecutivos en 15min, cada uno < (o >) al cierre de 4 barras antes.
+    # Bearish setup (9 cierres < cierre[−4]) = agotamiento bajista → señal de posible reversión alcista.
+    # Bullish setup (9 cierres > cierre[−4]) = agotamiento alcista → señal de posible reversión bajista.
+    try:
+        cl = df['Close']
+        bear_cnt = bull_cnt = 0
+        for i in range(len(cl) - 1, 3, -1):
+            if cl.iloc[i] < cl.iloc[i - 4]:
+                if bull_cnt > 0: break
+                bear_cnt += 1
+            elif cl.iloc[i] > cl.iloc[i - 4]:
+                if bear_cnt > 0: break
+                bull_cnt += 1
+            else:
+                break
+        if bear_cnt >= 9:
+            demark_signal = f"⚠️ Agotamiento bajista {bear_cnt}/9+ → vigilar reversión alcista"
+        elif bull_cnt >= 9:
+            demark_signal = f"⚠️ Agotamiento alcista {bull_cnt}/9+ → vigilar reversión bajista"
+        elif bear_cnt >= 6:
+            demark_signal = f"🟡 Conteo bajista {bear_cnt}/9"
+        elif bull_cnt >= 6:
+            demark_signal = f"🟡 Conteo alcista {bull_cnt}/9"
+        else:
+            demark_signal = f"{max(bear_cnt, bull_cnt)}/9"
+    except Exception:
+        demark_signal = "N/D"
+
     broken_e1 = lower_highs_ok and price > ma20_h
     broken_e2 = higher_lows_ok and price < ma20_h
 
@@ -274,7 +326,13 @@ def analyze_yoel_e1_e2(df):
         "bias": bias, "strength": strength, "setup": setup,
         "ma20_h": round(ma20_h, 2), "price": round(price, 2),
         "lower_highs": lower_highs_ok, "higher_lows": higher_lows_ok,
-        "no_lateral": bool(no_lateral)
+        "no_lateral": bool(no_lateral),
+        "dist_ma20h_pct":   dist_ma20h_pct,
+        "nivel_soporte":    round(nivel_soporte, 2)    if nivel_soporte    is not None else None,
+        "nivel_resistencia": round(nivel_resistencia, 2) if nivel_resistencia is not None else None,
+        "vol_relativo":     vol_relativo,
+        "vol_confirma":     bool(vol_confirma),
+        "demark_signal":    demark_signal,
     }
 
 # ==================== TREND LINE (MECHAS, UNA SOLA, SEGÚN BIAS) ====================
@@ -554,8 +612,14 @@ def get_full_premarket_analysis(ticker):
         "yoel_bias": yoel.get("bias", ""), "yoel_setup": yoel.get("setup", ""),
         "yoel_lower_highs": yoel.get("lower_highs"),
         "yoel_higher_lows": yoel.get("higher_lows"),
-        "yoel_no_lateral": yoel.get("no_lateral"),
-        "ma20_h": yoel.get("ma20_h"),
+        "yoel_no_lateral":  yoel.get("no_lateral"),
+        "ma20_h":           yoel.get("ma20_h"),
+        "yoel_dist_ma20h_pct":    yoel.get("dist_ma20h_pct"),
+        "yoel_nivel_soporte":     yoel.get("nivel_soporte"),
+        "yoel_nivel_resistencia": yoel.get("nivel_resistencia"),
+        "yoel_vol_relativo":      yoel.get("vol_relativo"),
+        "yoel_vol_confirma":      yoel.get("vol_confirma"),
+        "yoel_demark_signal":     yoel.get("demark_signal"),
         "bias_dia": daily_ctx.get("bias_dia"),
         "chart_path": chart_path, "df": hist
     }
@@ -626,26 +690,60 @@ def job():
             send_to_discord(f"**{t}**: Error obteniendo datos")
             continue
 
-        # Debug interno (consola, no va a Discord) — LH/HL crudos del checklist
+        # Debug interno (consola, no va a Discord)
         print(f"[debug] {t} LH={data['yoel_lower_highs']} HL={data['yoel_higher_lows']}")
 
+        setup      = data['yoel_setup']
+        ma20h      = data['ma20_h']
+        soporte    = data.get('yoel_nivel_soporte')
+        resist     = data.get('yoel_nivel_resistencia')
+        dist       = data.get('yoel_dist_ma20h_pct')
+        vol_rel    = data.get('yoel_vol_relativo')
+        vol_ok     = data.get('yoel_vol_confirma')
+        demark     = data.get('yoel_demark_signal', 'N/D')
+        bb15_str   = "Abierto ✅" if data['yoel_no_lateral'] else "Lateral ⚠️"
+
+        # Tesis condicional SI/ENTONCES — formato Mark Douglas:
+        # el análisis pre-market prepara la mente, no predice el resultado.
+        s_str = f"${soporte}"  if soporte is not None else "N/D"
+        r_str = f"${resist}"   if resist  is not None else "N/D"
+        if 'E1' in setup and 'WATCH' not in setup:
+            tesis = (f"✅ SI precio mantiene sobre MA20H (${ma20h}) CON BB15 {bb15_str} → entrada válida\n"
+                     f"❌ INVALIDA si precio cae bajo soporte {s_str}")
+        elif 'E2' in setup and 'WATCH' not in setup:
+            tesis = (f"✅ SI precio mantiene bajo MA20H (${ma20h}) CON BB15 {bb15_str} → entrada válida\n"
+                     f"❌ INVALIDA si precio sube sobre resistencia {r_str}")
+        elif 'E1 WATCH' in setup:
+            tesis = (f"👁 SI precio cierra sobre MA20H (${ma20h}) CON BB15 abierto → E1 confirmado\n"
+                     f"❌ INVALIDA si precio no logra superar resistencia {r_str}")
+        elif 'E2 WATCH' in setup:
+            tesis = (f"👁 SI precio cierra bajo MA20H (${ma20h}) CON BB15 abierto → E2 confirmado\n"
+                     f"❌ INVALIDA si precio rebota sobre resistencia {r_str}")
+        else:
+            tesis = f"⏸ Sin setup activo. Esperar ruptura de MA20H (${ma20h})\n   R: {r_str}  |  S: {s_str}"
+
+        dist_str  = f"{dist:+.1f}%" if dist is not None else "N/D"
+        vol_str   = (f"{vol_rel:.1f}x {'✅' if vol_ok else '⚠️'}"
+                     if vol_rel is not None else "N/D")
+        bloque_a_tag = "✅" if data['bloque_a_pass'] else ("⚠️" if data['bloque_a_pass'] is False else "—")
+
         msg = (
-            f"**{t}**  |  Cierre ant.: ${data['prev_close']}  |  Actual: ${data['snapshot_price']}  |  "
-            f"Var: {data['var_pct']}% {data['var_dir']}\n"
+            f"**{t}**  |  ${data['snapshot_price']}  ({data['var_pct']:+.2f}% {data['var_dir']})  |  Cierre ant.: ${data['prev_close']}\n"
             f"{data['earnings']}  |  {data['fed']}\n"
-            f"Bloque A {'✅' if data['bloque_a_pass'] else ('⚠️' if data['bloque_a_pass'] is False else '—')}: "
-            f"{' | '.join(data['bloque_a_flags'])}\n"
-            f"Yoel: {data['yoel_bias']} | Setup: {data['yoel_setup']}\n"
-            f"NoLateral: {data['yoel_no_lateral']} | MA20H: ${data['ma20_h']}\n"
-            f"Contexto Día: {data['bias_dia']}"
+            f"Bloque A {bloque_a_tag}: {' | '.join(data['bloque_a_flags'])}\n"
+            f"─────────────────────────────\n"
+            f"Setup: {data['yoel_bias']}  |  Ctx Día: {data['bias_dia']}\n"
+            f"{tesis}\n"
+            f"📏 MA20H: ${ma20h} ({dist_str})  |  S: {s_str}  |  R: {r_str}\n"
+            f"📊 Vol: {vol_str}  |  DeMark: {demark}  |  BB15: {bb15_str}"
         )
         images = [data['chart_path']] if data.get('chart_path') else None
         send_to_discord(msg, image_paths=images)
 
     print("✅ Reportes individuales + gráficos enviados a Discord")
 
-TARGET_TIMES_ET = [(9, 0), (11, 0), (13, 30)]  # 30 min antes de cada break real (9:30, 11:30, 2:00 ET)
-TOLERANCE_MIN = 30  # margen para el delay típico de arranque de un runner en GitHub Actions
+TARGET_TIMES_ET = [(9, 0), (11, 0), (13, 30)]
+TOLERANCE_MIN = 30  # margen ampliado — GitHub Actions puede arrancar hasta 30min tarde
 
 
 def _is_target_window():
