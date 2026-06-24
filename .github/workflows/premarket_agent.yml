@@ -2,16 +2,25 @@ name: Yoel E1/E2 Premarket Agent
 
 on:
   schedule:
-    # Minutos desplazados (:07, :37) en vez de horas redondas para evitar la cola
-    # de alta carga de GitHub Actions, que retrasa los crons de :00 hasta 15-60 min.
     # ZoneInfo("America/New_York") en el script maneja DST automaticamente.
-    - cron: "7 13 * * 1-5"    # 09:07 ET (EDT=UTC-4)
-    - cron: "7 15 * * 1-5"    # 11:07 ET
-    - cron: "37 17 * * 1-5"   # 13:37 ET
+    # 2 disparos por ventana (+10 min de diferencia) para cubrir el throttling
+    # de GitHub Actions en horas de alta carga. El guard anti-duplicado en
+    # premarket_agent.py garantiza que solo el PRIMERO que llegue envia
+    # el mensaje; el segundo lee el estado en cache y sale silenciosamente.
+    - cron: "0 13 * * 1-5"    # 09:00 ET (EDT=UTC-4) — disparo principal
+    - cron: "10 13 * * 1-5"   # 09:10 ET             — redundancia
+    - cron: "0 15 * * 1-5"    # 11:00 ET             — disparo principal
+    - cron: "10 15 * * 1-5"   # 11:10 ET             — redundancia
+    - cron: "30 17 * * 1-5"   # 13:30 ET             — disparo principal
+    - cron: "40 17 * * 1-5"   # 13:40 ET             — redundancia
   workflow_dispatch:
     inputs:
       force_run:
-        description: "Forzar ejecución ignorando la ventana horaria (1 = sí)"
+        description: "Forzar ejecucion ignorando la ventana horaria (1 = si)"
+        required: false
+        default: "0"
+      skip_duplicate_guard:
+        description: "Saltar guard anti-duplicado (1 = si, solo para pruebas)"
         required: false
         default: "0"
 
@@ -30,8 +39,38 @@ jobs:
       - name: Instalar dependencias
         run: pip install -r requirements.txt
 
+      # Persiste .premarket_sent.json entre runs del mismo dia.
+      # La key incluye la fecha UTC (suficientemente aproximada a ET para
+      # los crons de madrugada) para que la cache se invalide automaticamente
+      # al dia siguiente sin accion manual.
+      # restore-keys sin sufijo de fecha permite recuperar la cache del dia
+      # anterior como fallback en caso de que la primera entrada del dia aun
+      # no haya creado la suya propia.
+      - name: Restaurar estado anti-duplicado
+        uses: actions/cache@v4
+        with:
+          path: .premarket_sent.json
+          key: premarket-state-${{ github.run_id }}
+          restore-keys: |
+            premarket-state-
+
       - name: Correr agente
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          # Para runs programados: FORCE_RUN=1 siempre -- el cron ya es la
+          # guardia de tiempo. El guard anti-duplicado sigue activo.
+          # Para runs manuales: respeta el input del usuario.
           FORCE_RUN: ${{ github.event_name == 'schedule' && '1' || github.event.inputs.force_run || '0' }}
+          SKIP_DUPLICATE_GUARD: ${{ github.event.inputs.skip_duplicate_guard || '0' }}
         run: python premarket_agent.py
+
+      # Guarda el estado actualizado para que el cron redundante lo encuentre.
+      # Se ejecuta SIEMPRE (aunque el step anterior falle) para no perder el
+      # estado si el script murio despues de marcar una ventana pero antes de
+      # que actions/cache lo pudiera guardar automaticamente.
+      - name: Guardar estado anti-duplicado
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .premarket_sent.json
+          key: premarket-state-${{ github.run_id }}
