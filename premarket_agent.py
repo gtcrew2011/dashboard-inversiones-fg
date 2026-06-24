@@ -423,25 +423,6 @@ def _anchor_from_extreme(hull, extreme_idx, min_span=3):
             return (sub[i], sub[i + 1])
     return (sub[0], sub[-1])
 
-def _recent_direction(window, recent_bars=30):
-    """
-    Pendiente de regresión lineal (mínimos cuadrados) sobre las últimas
-    `recent_bars` velas, NO una simple resta entre el primer y último close.
-    La resta simple es muy sensible a dónde cae el corte de la ventana: si hay
-    un pico o valle intermedio (ej. un rally que ya hizo top y viene
-    retrocediendo dentro de esa ventana), la resta puede dar negativo aunque la
-    tendencia de fondo siga siendo claramente alcista. La regresión usa TODOS
-    los puntos de la ventana, así que un solo pico/valle intermedio pesa mucho
-    menos que la dirección dominante del conjunto.
-    """
-    recent = window.tail(recent_bars)
-    if len(recent) < 5:
-        return 0
-    y = recent['Close'].values
-    x = np.arange(len(y))
-    slope = np.polyfit(x, y, 1)[0]
-    return slope
-
 def _get_relevant_trendline(df_h, yoel_setup, lower_highs_ok=False, higher_lows_ok=False, lookback=None):
     """
     Dibuja SOLO la línea relevante, nunca ambas a la vez.
@@ -459,35 +440,36 @@ def _get_relevant_trendline(df_h, yoel_setup, lower_highs_ok=False, higher_lows_
     """
     window = df_h if lookback is None else df_h.tail(lookback)
     s = yoel_setup or ""
-    # Setup "completo" = la señal final confirmada (ej. 'E1', 'E2'), NO un estado
-    # intermedio como 'E1 WATCH' / 'E2 WATCH' ni 'SIN SETUP'. Antes "E2" in s
-    # también hacía match con "E2 WATCH", forzando la línea bajista aunque el
-    # bias diario fuera Alcista y la estructura mostrara higher-lows.
-    is_e1_setup = "E1" in s and "WATCH" not in s and "SIN SETUP" not in s
-    is_e2_setup = "E2" in s and "WATCH" not in s and "SIN SETUP" not in s
 
-    if is_e1_setup:
-        draw_e1, draw_e2 = True, False
-    elif is_e2_setup:
-        draw_e1, draw_e2 = False, True
-    elif _recent_direction(window) != 0:
-        # Para la línea VISUAL (sin setup completo), priorizamos la estructura
-        # RECIENTE sobre los flags oficiales lower_highs_ok/higher_lows_ok.
-        # Esos flags son correctos como señal (miran el histórico multi-día
-        # completo), pero por eso mismo pueden seguir marcando 'lower_highs_ok'
-        # mientras el precio sigue por debajo de un high de hace +1 semana,
-        # aunque la estructura de los últimos días ya sea claramente alcista.
-        # Esta rama no toca la señal oficial E1/E2 ni Bloques C-F, solo decide
-        # qué línea pintar como referencia visual.
-        draw_e1, draw_e2 = (True, False) if _recent_direction(window) > 0 else (False, True)
-    elif higher_lows_ok and not lower_highs_ok:
-        draw_e1, draw_e2 = True, False
+    # FUENTE ÚNICA DE VERDAD: la línea del gráfico SIEMPRE refleja la señal E1/E2 del texto.
+    # Se eliminó la rama _recent_direction que creaba un "segundo cerebro" capaz de pintar
+    # una línea contraria a la señal (ej. AAPL E2 con línea alcista). El gráfico no opina;
+    # ilustra exactamente lo que dice el análisis.
+    #
+    # Mapeo correcto (alineado con analyze_yoel_e1_e2):
+    #  - E1 (CALL, cambio alcista): rompe estructura de LOWER HIGHS → se dibuja la línea
+    #    de RESISTENCIA bajista que el precio acaba de romper al alza (línea sobre highs).
+    #  - E2 (PUT, cambio bajista): rompe estructura de HIGHER LOWS → se dibuja la línea
+    #    de SOPORTE alcista que el precio acaba de romper a la baja (línea bajo lows).
+    is_e1 = "E1" in s and "SIN SETUP" not in s   # COMPLETO o WATCH: misma dirección de línea
+    is_e2 = "E2" in s and "SIN SETUP" not in s
+
+    if is_e1:
+        # E1 = cambio alcista → línea sobre los lower-highs rotos (resistencia bajista)
+        draw_resistencia, draw_soporte = True, False
+    elif is_e2:
+        # E2 = cambio bajista → línea bajo los higher-lows rotos (soporte alcista)
+        draw_resistencia, draw_soporte = False, True
     elif lower_highs_ok and not higher_lows_ok:
-        draw_e1, draw_e2 = False, True
+        # SIN SETUP pero estructura de LH → tendencia bajista vigente → línea de resistencia
+        draw_resistencia, draw_soporte = True, False
+    elif higher_lows_ok and not lower_highs_ok:
+        # SIN SETUP pero estructura de HL → tendencia alcista vigente → línea de soporte
+        draw_resistencia, draw_soporte = False, True
     else:
         return None, None
 
-    if draw_e1:
+    if draw_soporte:
         lows_arr = window['Low'].values
         idx_min = int(lows_arr.argmin())
         pts = list(enumerate(lows_arr))
@@ -497,9 +479,9 @@ def _get_relevant_trendline(df_h, yoel_setup, lower_highs_ok=False, higher_lows_
             (i1, y1), (i2, y2) = edge
             x1, x2 = window.index[i1], window.index[i2]
             trend = _build_trendline(df_h.index, x1, y1, x2, y2)
-            return trend, '#4fc3f7'  # cyan -- alcista
+            return trend, '#4fc3f7'  # cyan -- línea de soporte (bajo lows)
 
-    if draw_e2:
+    if draw_resistencia:
         highs_arr = window['High'].values
         idx_max = int(highs_arr.argmax())
         pts = list(enumerate(highs_arr))
@@ -509,7 +491,7 @@ def _get_relevant_trendline(df_h, yoel_setup, lower_highs_ok=False, higher_lows_
             (i1, y1), (i2, y2) = edge
             x1, x2 = window.index[i1], window.index[i2]
             trend = _build_trendline(df_h.index, x1, y1, x2, y2)
-            return trend, '#ff4fa3'  # rosado -- bajista
+            return trend, '#ff4fa3'  # rosado -- línea de resistencia (sobre highs)
 
     return None, None
 
