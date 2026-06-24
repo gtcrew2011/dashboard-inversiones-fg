@@ -645,7 +645,7 @@ def job():
     print("✅ Reportes individuales + gráficos enviados a Discord")
 
 TARGET_TIMES_ET = [(9, 0), (11, 0), (13, 30)]  # 30 min antes de cada break real (9:30, 11:30, 2:00 ET)
-TOLERANCE_MIN = 12  # margen para el delay típico de arranque de un runner en GitHub Actions
+TOLERANCE_MIN = 30  # margen para el delay típico de arranque de un runner en GitHub Actions
 
 
 def _is_target_window():
