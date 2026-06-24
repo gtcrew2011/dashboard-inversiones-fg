@@ -241,6 +241,8 @@ def analyze_yoel_e1_e2(df):
     bb15_avg          = bb15_width_series.rolling(50).mean().iloc[-1]
     no_lateral = bool(not pd.isna(bb15_avg) and bb15_avg > 0 and bb15_current > bb15_avg)
 
+    price = df['Close'].iloc[-1]
+
     # ── Volumen relativo (Pring) ──────────────────────────────────────────────
     # Promedio de las últimas 4 barras de 15min (≈1h) vs media histórica de la ventana.
     # Confirma que la ruptura tiene convicción real detrás.
@@ -298,16 +300,22 @@ def analyze_yoel_e1_e2(df):
     except Exception:
         demark_signal = "N/D"
 
+    # BB15 upper/lower para el cálculo de strength
+    bb15_mid   = df['Close'].rolling(20).mean().iloc[-1]
+    bb15_std   = df['Close'].rolling(20).std().iloc[-1]
+    bb15_upper = bb15_mid + 2 * bb15_std
+    bb15_lower = bb15_mid - 2 * bb15_std
+
     broken_e1 = lower_highs_ok and price > ma20_h
     broken_e2 = higher_lows_ok and price < ma20_h
 
     if broken_e1 and no_lateral:
         bias = "🟢 E1 ALCISTA (CALL)"
-        strength = "FUERTE" if price > (bb_mid + 2*bb_std) else "MODERADA"
+        strength = "FUERTE" if price > bb15_upper else "MODERADA"
         setup = "E1 COMPLETO"
     elif broken_e2 and no_lateral:
         bias = "🔴 E2 BAJISTA (PUT)"
-        strength = "FUERTE" if price < (bb_mid - 2*bb_std) else "MODERADA"
+        strength = "FUERTE" if price < bb15_lower else "MODERADA"
         setup = "E2 COMPLETO"
     elif broken_e1:
         bias = "🟡 E1 WATCH"
